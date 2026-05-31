@@ -554,30 +554,53 @@ def main(stdscr):
                                             "y": random.choice(bird_heights)})
 
             # Move Obstacles
+            eff_speed = s.speed * s.slow_factor
             for obs in s.obstacles:
-                obs["x"] -= s.speed
+                obs["x"] -= eff_speed
             s.obstacles = [o for o in s.obstacles if o["x"] > -15]
+
+            # Helper: check if spawn x is too close to any existing obstacle
+            def safe_to_spawn(spawn_x, min_dist=30):
+                for obs in s.obstacles:
+                    if abs(obs["x"] - spawn_x) < min_dist:
+                        return False
+                return True
 
             # Spawning Coins
             s.coin_spawn_timer += 1
             if s.coin_spawn_timer >= random.randint(35, 75):
                 s.coin_spawn_timer = 0
-                coin_y_choices = [ground_y - 3, ground_y - 6, ground_y - 9]
-                s.coins.append({
-                    "x": float(max_x + 2),
-                    "y": float(random.choice(coin_y_choices))
-                })
+                spawn_x = float(max_x + 2)
+                if safe_to_spawn(spawn_x, min_dist=35):
+                    coin_y_choices = [ground_y - 3, ground_y - 6, ground_y - 9]
+                    s.coins.append({
+                        "x": spawn_x,
+                        "y": float(random.choice(coin_y_choices))
+                    })
 
             # Spawning Power-ups
             s.powerup_spawn_timer += 1
             if s.powerup_spawn_timer >= random.randint(320, 580):
                 s.powerup_spawn_timer = 0
-                pup_type = "shield" if random.random() < 0.5 else "magnet"
-                s.powerups.append({
-                    "type": pup_type,
-                    "x": float(max_x + 2),
-                    "y": float(ground_y - 5)
-                })
+                spawn_x = float(max_x + 2)
+                if safe_to_spawn(spawn_x, min_dist=40):
+                    r = random.random()
+                    if s.speed >= 2.7:
+                        # All three power-ups available at high speed
+                        if r < 0.33:
+                            pup_type = "shield"
+                        elif r < 0.66:
+                            pup_type = "magnet"
+                        else:
+                            pup_type = "slow"
+                    else:
+                        # Only shield and magnet at lower speeds
+                        pup_type = "shield" if r < 0.5 else "magnet"
+                    s.powerups.append({
+                        "type": pup_type,
+                        "x": spawn_x,
+                        "y": float(ground_y - 5)
+                    })
 
             # Move Coins (Handle Magnet Pull Vector Physics!)
             dino_center_y = s.dino_y + len(DINO_RUN1) // 2
@@ -594,14 +617,14 @@ def main(stdscr):
                         coin["x"] += (dx_vec / dist) * pull_speed
                         coin["y"] += (dy_vec / dist) * pull_speed
                     else:
-                        coin["x"] -= s.speed
+                        coin["x"] -= eff_speed
                 else:
-                    coin["x"] -= s.speed
+                    coin["x"] -= eff_speed
             s.coins = [c for c in s.coins if c["x"] > -5]
 
             # Move Power-ups
             for pup in s.powerups:
-                pup["x"] -= s.speed
+                pup["x"] -= eff_speed
             s.powerups = [p for p in s.powerups if p["x"] > -5]
 
             # Decaying Timers (Power-ups & Combos)
@@ -629,6 +652,20 @@ def main(stdscr):
                         "vy": -0.3,
                         "life": 30,
                         "color": curses.color_pair(11) | curses.A_DIM
+                    })
+
+            if s.slow_active:
+                s.slow_timer -= 1
+                if s.slow_timer <= 0:
+                    s.slow_active = False
+                    s.slow_factor = 1.0
+                    s.combo_texts.append({
+                        "text": "SLOW-MO EXPIRED",
+                        "x": float(dino_x),
+                        "y": s.dino_y - 1,
+                        "vy": -0.3,
+                        "life": 30,
+                        "color": curses.color_pair(6) | curses.A_DIM
                     })
 
             if s.combo > 0:
@@ -745,6 +782,21 @@ def main(stdscr):
                                         color=curses.color_pair(6) | curses.A_BOLD, chars=["M", "*", "+"])
                         s.combo_texts.append({
                             "text": "🧲 MAGNET ACQUIRED!",
+                            "x": float(dino_x),
+                            "y": s.dino_y - 2,
+                            "vy": -0.3,
+                            "life": 40,
+                            "color": curses.color_pair(6) | curses.A_BOLD
+                        })
+                    elif pup["type"] == "slow":
+                        s.slow_active = True
+                        s.slow_timer = SLOW_DURATION
+                        s.slow_factor = 0.70
+                        # Spawn purple/magenta time-warp particles
+                        spawn_particles(pup["x"] + 1, pup["y"] + 1, count=12,
+                                        color=curses.color_pair(6) | curses.A_BOLD, chars=["~", "·", "s", "*"])
+                        s.combo_texts.append({
+                            "text": "SLOW-MO ACTIVATED!",
                             "x": float(dino_x),
                             "y": s.dino_y - 2,
                             "vy": -0.3,
@@ -985,8 +1037,15 @@ def main(stdscr):
 
         # Draw Power-ups
         for pup in s.powerups:
-            pup_sprite = SHIELD_ICON if pup["type"] == "shield" else MAGNET_ICON
-            pup_color = curses.color_pair(12) if pup["type"] == "shield" else curses.color_pair(6)
+            if pup["type"] == "shield":
+                pup_sprite = SHIELD_ICON
+                pup_color = curses.color_pair(12)
+            elif pup["type"] == "slow":
+                pup_sprite = SLOW_ICON
+                pup_color = curses.color_pair(6)
+            else:
+                pup_sprite = MAGNET_ICON
+                pup_color = curses.color_pair(6)
             draw_sprite(stdscr, int(pup["y"]) + shake_y, int(pup["x"]) + sx, pup_sprite,
                         max_y, max_x, pup_color | curses.A_BOLD)
 
@@ -1072,7 +1131,7 @@ def main(stdscr):
             pass
 
         # Day/Night phase indicator
-        indicator = "☾ NIGHT" if s.is_night else "☀ DAY"
+        indicator = " NIGHT" if s.is_night else " DAY"
         try:
             stdscr.addstr(1, 2, indicator, curses.color_pair(9 if s.is_night else 2) | curses.A_BOLD)
         except curses.error:
